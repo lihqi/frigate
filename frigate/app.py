@@ -53,7 +53,8 @@ from frigate.ptz.autotrack import PtzAutoTrackerThread
 from frigate.ptz.onvif import OnvifController
 from frigate.record.cleanup import RecordingCleanup
 from frigate.record.record import manage_recordings
-from frigate.stats import StatsEmitter, stats_init
+from frigate.stats.emitter import StatsEmitter
+from frigate.stats.util import stats_init
 from frigate.storage import StorageMaintainer
 from frigate.timeline import TimelineProcessor
 from frigate.types import CameraMetricsTypes, FeatureMetricsTypes, PTZMetricsTypes
@@ -374,11 +375,6 @@ class FrigateApp:
         models = [Event, Recordings, RecordingsToDelete, Previews, Regions, Timeline]
         self.db.bind(models)
 
-    def init_stats(self) -> None:
-        self.stats_tracking = stats_init(
-            self.config, self.camera_metrics, self.detectors, self.processes
-        )
-
     def init_external_event_processor(self) -> None:
         self.external_event_processor = ExternalEventProcessor(
             self.config, self.event_queue
@@ -391,12 +387,12 @@ class FrigateApp:
         self.flask_app = create_app(
             self.config,
             self.db,
-            self.stats_tracking,
             self.detected_frames_processor,
             self.storage_maintainer,
             self.onvif_controller,
             self.external_event_processor,
             self.plus_api,
+            self.stats_emitter,
         )
 
     def init_onvif(self) -> None:
@@ -601,8 +597,9 @@ class FrigateApp:
     def start_stats_emitter(self) -> None:
         self.stats_emitter = StatsEmitter(
             self.config,
-            self.stats_tracking,
-            self.dispatcher,
+            stats_init(
+                self.config, self.camera_metrics, self.detectors, self.processes
+            ),
             self.stop_event,
         )
         self.stats_emitter.start()
@@ -694,14 +691,13 @@ class FrigateApp:
         self.start_camera_capture_processes()
         self.start_audio_processors()
         self.start_storage_maintainer()
-        self.init_stats()
         self.init_external_event_processor()
+        self.start_stats_emitter()
         self.init_web_server()
         self.start_timeline_processor()
         self.start_event_processor()
         self.start_event_cleanup()
         self.start_record_cleanup()
-        self.start_stats_emitter()
         self.start_watchdog()
         self.check_shm()
 

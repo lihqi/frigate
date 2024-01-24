@@ -12,6 +12,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from functools import reduce
 from pathlib import Path
+from typing import Optional
 from urllib.parse import unquote
 
 import cv2
@@ -50,7 +51,7 @@ from frigate.object_processing import TrackedObject
 from frigate.plus import PlusApi
 from frigate.ptz.onvif import OnvifController
 from frigate.record.export import PlaybackFactorEnum, RecordingExporter
-from frigate.stats import stats_snapshot
+from frigate.stats.emitter import StatsEmitter
 from frigate.storage import StorageMaintainer
 from frigate.util.builtin import (
     clean_camera_user_pass,
@@ -70,12 +71,12 @@ bp = Blueprint("frigate", __name__)
 def create_app(
     frigate_config,
     database: SqliteQueueDatabase,
-    stats_tracking,
     detected_frames_processor,
     storage_maintainer: StorageMaintainer,
     onvif: OnvifController,
     external_processor: ExternalEventProcessor,
     plus_api: PlusApi,
+    stats_emitter: StatsEmitter,
 ):
     app = Flask(__name__)
 
@@ -97,14 +98,13 @@ def create_app(
             database.close()
 
     app.frigate_config = frigate_config
-    app.stats_tracking = stats_tracking
     app.detected_frames_processor = detected_frames_processor
     app.storage_maintainer = storage_maintainer
     app.onvif = onvif
     app.external_processor = external_processor
     app.plus_api = plus_api
     app.camera_error_image = None
-    app.hwaccel_errors = []
+    app.stats_emitter = stats_emitter
 
     app.register_blueprint(bp)
 
@@ -1725,12 +1725,12 @@ def version():
 
 @bp.route("/stats")
 def stats():
-    stats = stats_snapshot(
-        current_app.frigate_config,
-        current_app.stats_tracking,
-        current_app.hwaccel_errors,
-    )
-    return jsonify(stats)
+    return jsonify(current_app.stats_emitter.get_latest_stats())
+
+
+@bp.route("/stats/history")
+def stats_history():
+    return jsonify(current_app.stats_emitter.get_stats_history())
 
 
 @bp.route("/<camera_name>")
@@ -1927,11 +1927,9 @@ def get_snapshot_from_recording(camera_name: str, frame_time: str):
 
 @bp.route("/recordings/storage", methods=["GET"])
 def get_recordings_storage_usage():
-    recording_stats = stats_snapshot(
-        current_app.frigate_config,
-        current_app.stats_tracking,
-        current_app.hwaccel_errors,
-    )["service"]["storage"][RECORD_DIR]
+    recording_stats = current_app.stats_emitter.get_latest_stats()["service"][
+        "storage"
+    ][RECORD_DIR]
 
     if not recording_stats:
         return jsonify({})
